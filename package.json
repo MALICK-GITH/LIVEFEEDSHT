@@ -1,0 +1,21 @@
+{
+  "name": "mirror-api",
+  "version": "1.0.0",
+  "description": "API miroir qui relaie une API distante.",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js"
+  },
+  "keywords": [
+    "api",
+    "proxy",
+    "mirror",
+    "express"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "dotenv": "^16.6.1",
+    "express": "^4.21.2"
+  }
+}
