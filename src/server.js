@@ -59,14 +59,9 @@ const upstreamPresets = {
 };
 
 const providerKeys = Object.keys(upstreamPresets);
-const startupProviderKey =
-  providerKeys[Math.floor(Math.random() * providerKeys.length)];
+const primaryProviderKey = "888starz";
 
 app.use(express.json());
-
-function pickRandomProviderKey() {
-  return providerKeys[Math.floor(Math.random() * providerKeys.length)];
-}
 
 function buildTargetUrl(baseUrl, path, query) {
   const normalizedBaseUrl = baseUrl.replace(/\/+$/, "");
@@ -208,19 +203,18 @@ app.get("/", (_request, response) => {
     message: "API miroir active",
     target: targetBaseUrl || null,
     providers: providerKeys,
-    startupProvider: startupProviderKey,
+    primaryProvider: primaryProviderKey,
     endpoints: {
       health: "/health",
       proxyAnyPath: "/mirror/*",
       providerMirror: "/providers/:provider/live-feed",
-      startupMirror: "/live-feed",
-      randomMirror: "/live-feed/random"
+      primaryMirror: "/live-feed"
     }
   });
 });
 
 app.get("/health", (_request, response) => {
-  response.json({ status: "ok", startupProvider: startupProviderKey });
+  response.json({ status: "ok", primaryProvider: primaryProviderKey });
 });
 
 app.all("/mirror/*", async (request, response) => {
@@ -243,16 +237,11 @@ app.get("/providers/:provider/live-feed", async (request, response) => {
 });
 
 app.get("/live-feed", async (request, response) => {
-  await relayProviderRequest(startupProviderKey, request, response);
-});
-
-app.get("/live-feed/random", async (request, response) => {
-  const randomProviderKey = pickRandomProviderKey();
-  await relayProviderRequest(randomProviderKey, request, response);
+  await relayProviderRequest(primaryProviderKey, request, response);
 });
 
 app.listen(port, () => {
   console.log(
-    `Mirror API démarrée sur http://localhost:${port} avec ${startupProviderKey} comme source principale`
+    `Mirror API démarrée sur http://localhost:${port} avec ${primaryProviderKey} comme source principale`
   );
 });

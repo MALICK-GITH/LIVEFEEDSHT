@@ -37,24 +37,19 @@ npm run dev
 - `ALL /mirror/*` : relaie la requête vers l'API cible
 - `GET /providers/1xbet/live-feed` : relaie le flux `1xbet`
 - `GET /providers/888starz/live-feed` : relaie le flux `888starz`
-- `GET /live-feed` : utilise la source choisie aléatoirement au démarrage
-- `GET /live-feed/random` : choisit une source aléatoire à chaque appel
+- `GET /live-feed` : utilise `888starz` comme source principale fixe
 
 ## Logique de sélection
 
-- Au démarrage du serveur, une source principale est choisie au hasard entre `1xbet` et `888starz`
-- Cette source reste la même jusqu'au prochain redémarrage
-- La route `/live-feed` utilise cette source principale
-- La route `/live-feed/random` refait un tirage aléatoire à chaque requête
+- `888starz` est la source principale fixe pour `/live-feed`
 - La réponse contient l'en-tête `x-selected-provider` pour savoir quelle source a été utilisée
 
 ## Exemples
 
 ```bash
 GET http://localhost:3000/live-feed
-GET http://localhost:3000/live-feed/random
-GET http://localhost:3000/providers/1xbet/live-feed
 GET http://localhost:3000/providers/888starz/live-feed
+GET http://localhost:3000/providers/1xbet/live-feed
 ```
 
 Tu peux surcharger les paramètres par défaut :
