@@ -7,6 +7,7 @@ const targetBaseUrl = process.env.TARGET_API_BASE_URL;
 const defaultUserAgent =
   process.env.MIRROR_USER_AGENT ||
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36";
+const upstreamTimeoutMs = Number(process.env.UPSTREAM_TIMEOUT_MS || 15000);
 
 const upstreamPresets = {
   "1xbet": {
@@ -60,6 +61,7 @@ const upstreamPresets = {
 
 const providerKeys = Object.keys(upstreamPresets);
 const primaryProviderKey = "888starz";
+const providerCache = new Map();
 
 app.use(express.json());
 
@@ -105,72 +107,68 @@ function copyResponseHeaders(sourceHeaders, response) {
   }
 }
 
-async function relayRequest({
-  request,
-  response,
-  targetUrl,
-  extraHeaders = {},
-  selectedProvider = null
-}) {
-  const headers = new Headers();
+function setProviderHeaders(response, selectedProvider, cached) {
+  if (selectedProvider) {
+    response.setHeader("x-selected-provider", selectedProvider);
+  }
 
-  for (const [key, value] of Object.entries(request.headers)) {
-    if (["host", "connection", "content-length"].includes(key.toLowerCase())) {
-      continue;
-    }
+  response.setHeader("x-cache-status", cached ? "stale" : "live");
+}
 
-    if (Array.isArray(value)) {
-      value.forEach((entry) => headers.append(key, entry));
-    } else if (value) {
-      headers.set(key, value);
+function isJsonLike(text) {
+  const trimmed = text.trim();
+  return trimmed.startsWith("{") || trimmed.startsWith("[");
+}
+
+function isSuccessfulPayload(payload) {
+  return (
+    payload &&
+    typeof payload === "object" &&
+    payload.Success === true &&
+    Array.isArray(payload.Value)
+  );
+}
+
+function cacheProviderPayload(providerKey, status, headers, payloadText) {
+  providerCache.set(providerKey, {
+    status,
+    headers: Array.from(headers.entries()),
+    payloadText,
+    cachedAt: new Date().toISOString()
+  });
+}
+
+function sendCachedPayload(response, providerKey) {
+  const cached = providerCache.get(providerKey);
+
+  if (!cached) {
+    return false;
+  }
+
+  for (const [key, value] of cached.headers) {
+    if (key.toLowerCase() !== "content-length") {
+      response.setHeader(key, value);
     }
   }
 
-  for (const [key, value] of Object.entries(extraHeaders)) {
-    headers.set(key, value);
-  }
+  setProviderHeaders(response, providerKey, true);
+  response.setHeader("x-cache-at", cached.cachedAt);
+  response.status(cached.status).type("application/json").send(cached.payloadText);
+  return true;
+}
 
-  const requestInit = {
-    method: request.method,
-    headers
-  };
-
-  if (!["GET", "HEAD"].includes(request.method)) {
-    requestInit.body = JSON.stringify(request.body);
-    if (!headers.has("content-type")) {
-      headers.set("content-type", "application/json");
-    }
-  }
+async function fetchUpstream(targetUrl, headers) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), upstreamTimeoutMs);
 
   try {
-    const upstreamResponse = await fetch(targetUrl, requestInit);
-    const contentType = upstreamResponse.headers.get("content-type") || "";
-    const isJson = contentType.includes("application/json");
-    const payload = isJson
-      ? await upstreamResponse.text()
-      : Buffer.from(await upstreamResponse.arrayBuffer());
-
-    copyResponseHeaders(upstreamResponse.headers, response);
-
-    if (selectedProvider) {
-      response.setHeader("x-selected-provider", selectedProvider);
-    }
-
-    response.status(upstreamResponse.status);
-
-    if (isJson) {
-      response.type("application/json").send(payload);
-      return;
-    }
-
-    response.send(payload);
-  } catch (error) {
-    response.status(502).json({
-      error: "Bad Gateway",
-      message: "Impossible de joindre l'API cible.",
-      details: error.message,
-      provider: selectedProvider
+    return await fetch(targetUrl, {
+      method: "GET",
+      headers,
+      signal: controller.signal
     });
+  } finally {
+    clearTimeout(timeout);
   }
 }
 
@@ -187,14 +185,57 @@ async function relayProviderRequest(providerKey, request, response) {
 
   const query = mergeQuery(provider.defaultQuery, request.query);
   const targetUrl = buildTargetUrl(provider.baseUrl, provider.path, query);
+  const headers = new Headers(provider.headers);
 
-  await relayRequest({
-    request,
-    response,
-    targetUrl,
-    extraHeaders: provider.headers,
-    selectedProvider: providerKey
-  });
+  try {
+    const upstreamResponse = await fetchUpstream(targetUrl, headers);
+    const payloadText = await upstreamResponse.text();
+    const contentType = upstreamResponse.headers.get("content-type") || "";
+    const shouldTreatAsJson = contentType.includes("application/json") || isJsonLike(payloadText);
+
+    if (!shouldTreatAsJson) {
+      throw new Error("La source a renvoyé un contenu non JSON.");
+    }
+
+    let parsedPayload;
+
+    try {
+      parsedPayload = JSON.parse(payloadText);
+    } catch (error) {
+      throw new Error("La source a renvoyé un JSON invalide.");
+    }
+
+    if (!isSuccessfulPayload(parsedPayload)) {
+      throw new Error("La source a renvoyé une réponse JSON sans données exploitables.");
+    }
+
+    copyResponseHeaders(upstreamResponse.headers, response);
+    setProviderHeaders(response, providerKey, false);
+    response
+      .status(upstreamResponse.status)
+      .type("application/json")
+      .send(payloadText);
+
+    cacheProviderPayload(
+      providerKey,
+      upstreamResponse.status,
+      upstreamResponse.headers,
+      payloadText
+    );
+  } catch (error) {
+    const cachedSent = sendCachedPayload(response, providerKey);
+
+    if (cachedSent) {
+      return;
+    }
+
+    response.status(502).json({
+      error: "Bad Gateway",
+      message: "Impossible de récupérer une réponse valide depuis l'API cible.",
+      details: error.message,
+      provider: providerKey
+    });
+  }
 }
 
 app.get("/", (_request, response) => {
@@ -214,7 +255,11 @@ app.get("/", (_request, response) => {
 });
 
 app.get("/health", (_request, response) => {
-  response.json({ status: "ok", primaryProvider: primaryProviderKey });
+  response.json({
+    status: "ok",
+    primaryProvider: primaryProviderKey,
+    cacheAvailable: providerCache.has(primaryProviderKey)
+  });
 });
 
 app.all("/mirror/*", async (request, response) => {
@@ -229,7 +274,27 @@ app.all("/mirror/*", async (request, response) => {
   const proxiedPath = request.params[0] || "";
   const targetUrl = buildTargetUrl(targetBaseUrl, proxiedPath, request.query);
 
-  await relayRequest({ request, response, targetUrl });
+  try {
+    const upstreamResponse = await fetchUpstream(targetUrl, new Headers(request.headers));
+    const contentType = upstreamResponse.headers.get("content-type") || "";
+    const payload = await upstreamResponse.text();
+
+    copyResponseHeaders(upstreamResponse.headers, response);
+    response.status(upstreamResponse.status);
+
+    if (contentType.includes("application/json") || isJsonLike(payload)) {
+      response.type("application/json").send(payload);
+      return;
+    }
+
+    response.send(payload);
+  } catch (error) {
+    response.status(502).json({
+      error: "Bad Gateway",
+      message: "Impossible de joindre l'API cible.",
+      details: error.message
+    });
+  }
 });
 
 app.get("/providers/:provider/live-feed", async (request, response) => {

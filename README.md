@@ -10,55 +10,39 @@ npm install
 
 ## Configuration
 
-Copiez `.env.example` vers `.env` puis définissez l'URL de l'API cible :
+Copiez `.env.example` vers `.env` puis définissez :
 
 ```env
 PORT=3000
 TARGET_API_BASE_URL=https://jsonplaceholder.typicode.com
 MIRROR_USER_AGENT=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36
-```
-
-## Lancement
-
-```bash
-npm start
-```
-
-Ou en mode développement :
-
-```bash
-npm run dev
+UPSTREAM_TIMEOUT_MS=15000
 ```
 
 ## Endpoints
 
 - `GET /` : infos sur le service
-- `GET /health` : vérification rapide
-- `ALL /mirror/*` : relaie la requête vers l'API cible
-- `GET /providers/1xbet/live-feed` : relaie le flux `1xbet`
-- `GET /providers/888starz/live-feed` : relaie le flux `888starz`
-- `GET /live-feed` : utilise `888starz` comme source principale fixe
+- `GET /health` : état du service et présence du cache
+- `GET /providers/888starz/live-feed` : flux direct `888starz`
+- `GET /providers/1xbet/live-feed` : flux direct `1xbet`
+- `GET /live-feed` : flux principal fixé sur `888starz`
 
-## Logique de sélection
+## Transmission des données
 
-- `888starz` est la source principale fixe pour `/live-feed`
-- La réponse contient l'en-tête `x-selected-provider` pour savoir quelle source a été utilisée
+- Le payload JSON de la source est retransmis tel quel
+- Aucune clé du corps JSON n'est supprimée ni renommée
+- Si la source renvoie un JSON valide avec `Success: true` et `Value`, ce JSON est renvoyé brut
 
-## Exemples
+## Fiabilité
 
-```bash
-GET http://localhost:3000/live-feed
-GET http://localhost:3000/providers/888starz/live-feed
-GET http://localhost:3000/providers/1xbet/live-feed
-```
+- Le service vérifie que la réponse amont est bien un JSON exploitable
+- En cas de blocage ou de réponse invalide, il renvoie le **dernier payload valide en cache** s'il existe
+- `x-cache-status: live` signifie réponse fraîche
+- `x-cache-status: stale` signifie réponse servie depuis le cache
+- `x-cache-at` indique la date ISO du dernier cache servi
 
-Tu peux surcharger les paramètres par défaut :
+## Limite importante
 
-```bash
-GET http://localhost:3000/live-feed?count=10&lng=fr
-```
-
-## Remarques
-
-- Le service ne stocke pas de `cookie` privé
-- Certains fournisseurs peuvent bloquer, limiter ou interdire ce type de relais selon leurs conditions d'utilisation
+- Je peux améliorer la robustesse du proxy
+- Je ne peux pas garantir `100%` si la source amont bloque, change ou coupe complètement l'accès
+- Le cache permet surtout d'éviter une panne visible immédiate sur ton endpoint
