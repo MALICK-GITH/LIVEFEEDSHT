@@ -7,9 +7,6 @@ const targetBaseUrl = process.env.TARGET_API_BASE_URL;
 const defaultUserAgent =
   process.env.MIRROR_USER_AGENT ||
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36";
-const upstreamTimeoutMs = Number(process.env.UPSTREAM_TIMEOUT_MS || 15000);
-const cacheTtlMs = Number(process.env.CACHE_TTL_MS || 10000);
-const apiKey = process.env.API_KEY || "";
 
 const upstreamPresets = {
   "1xbet": {
@@ -63,28 +60,8 @@ const upstreamPresets = {
 
 const providerKeys = Object.keys(upstreamPresets);
 const primaryProviderKey = "888starz";
-const providerCache = new Map();
 
 app.use(express.json());
-
-function requireApiKey(request, response, next) {
-  if (!apiKey) {
-    next();
-    return;
-  }
-
-  const providedKey = request.headers["x-api-key"];
-
-  if (providedKey !== apiKey) {
-    response.status(401).json({
-      error: "Unauthorized",
-      message: "Clé API invalide ou absente."
-    });
-    return;
-  }
-
-  next();
-}
 
 function buildTargetUrl(baseUrl, path, query) {
   const normalizedBaseUrl = baseUrl.replace(/\/+$/, "");
@@ -128,86 +105,6 @@ function copyResponseHeaders(sourceHeaders, response) {
   }
 }
 
-function setProviderHeaders(response, selectedProvider, cacheStatus, cachedAt = null) {
-  if (selectedProvider) {
-    response.setHeader("x-selected-provider", selectedProvider);
-  }
-
-  response.setHeader("x-cache-status", cacheStatus);
-
-  if (cachedAt) {
-    response.setHeader("x-cache-at", cachedAt);
-  }
-}
-
-function isJsonLike(text) {
-  const trimmed = text.trim();
-  return trimmed.startsWith("{") || trimmed.startsWith("[");
-}
-
-function isSuccessfulPayload(payload) {
-  return (
-    payload &&
-    typeof payload === "object" &&
-    payload.Success === true &&
-    Array.isArray(payload.Value)
-  );
-}
-
-function cacheProviderPayload(providerKey, status, headers, payloadText) {
-  providerCache.set(providerKey, {
-    status,
-    headers: Array.from(headers.entries()),
-    payloadText,
-    cachedAt: new Date().toISOString(),
-    expiresAt: Date.now() + cacheTtlMs
-  });
-}
-
-function getFreshCachedPayload(providerKey) {
-  const cached = providerCache.get(providerKey);
-
-  if (!cached) {
-    return null;
-  }
-
-  if (Date.now() > cached.expiresAt) {
-    return null;
-  }
-
-  return cached;
-}
-
-function getAnyCachedPayload(providerKey) {
-  return providerCache.get(providerKey) || null;
-}
-
-function sendCachedPayload(response, providerKey, cacheStatus, cached) {
-  for (const [key, value] of cached.headers) {
-    if (key.toLowerCase() !== "content-length") {
-      response.setHeader(key, value);
-    }
-  }
-
-  setProviderHeaders(response, providerKey, cacheStatus, cached.cachedAt);
-  response.status(cached.status).type("application/json").send(cached.payloadText);
-}
-
-async function fetchUpstream(targetUrl, headers) {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), upstreamTimeoutMs);
-
-  try {
-    return await fetch(targetUrl, {
-      method: "GET",
-      headers,
-      signal: controller.signal
-    });
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
 async function relayProviderRequest(providerKey, request, response) {
   const provider = upstreamPresets[providerKey];
 
@@ -219,63 +116,32 @@ async function relayProviderRequest(providerKey, request, response) {
     return;
   }
 
-  const freshCache = getFreshCachedPayload(providerKey);
-
-  if (freshCache) {
-    sendCachedPayload(response, providerKey, "fresh", freshCache);
-    return;
-  }
-
   const query = mergeQuery(provider.defaultQuery, request.query);
   const targetUrl = buildTargetUrl(provider.baseUrl, provider.path, query);
   const headers = new Headers(provider.headers);
 
   try {
-    const upstreamResponse = await fetchUpstream(targetUrl, headers);
-    const payloadText = await upstreamResponse.text();
+    const upstreamResponse = await fetch(targetUrl, {
+      method: "GET",
+      headers
+    });
     const contentType = upstreamResponse.headers.get("content-type") || "";
-    const shouldTreatAsJson = contentType.includes("application/json") || isJsonLike(payloadText);
-
-    if (!shouldTreatAsJson) {
-      throw new Error("La source a renvoyé un contenu non JSON.");
-    }
-
-    let parsedPayload;
-
-    try {
-      parsedPayload = JSON.parse(payloadText);
-    } catch (error) {
-      throw new Error("La source a renvoyé un JSON invalide.");
-    }
-
-    if (!isSuccessfulPayload(parsedPayload)) {
-      throw new Error("La source a renvoyé une réponse JSON sans données exploitables.");
-    }
+    const payload = await upstreamResponse.text();
 
     copyResponseHeaders(upstreamResponse.headers, response);
-    setProviderHeaders(response, providerKey, "live");
-    response
-      .status(upstreamResponse.status)
-      .type("application/json")
-      .send(payloadText);
+    response.setHeader("x-selected-provider", providerKey);
+    response.status(upstreamResponse.status);
 
-    cacheProviderPayload(
-      providerKey,
-      upstreamResponse.status,
-      upstreamResponse.headers,
-      payloadText
-    );
-  } catch (error) {
-    const fallbackCache = getAnyCachedPayload(providerKey);
-
-    if (fallbackCache) {
-      sendCachedPayload(response, providerKey, "stale", fallbackCache);
+    if (contentType.includes("application/json")) {
+      response.type("application/json").send(payload);
       return;
     }
 
+    response.send(payload);
+  } catch (error) {
     response.status(502).json({
       error: "Bad Gateway",
-      message: "Impossible de récupérer une réponse valide depuis l'API cible.",
+      message: "Impossible de joindre l'API cible.",
       details: error.message,
       provider: providerKey
     });
@@ -289,12 +155,6 @@ app.get("/", (_request, response) => {
     target: targetBaseUrl || null,
     providers: providerKeys,
     primaryProvider: primaryProviderKey,
-    security: {
-      apiKeyRequired: Boolean(apiKey)
-    },
-    cache: {
-      ttlMs: cacheTtlMs
-    },
     endpoints: {
       health: "/health",
       proxyAnyPath: "/mirror/*",
@@ -307,10 +167,7 @@ app.get("/", (_request, response) => {
 app.get("/health", (_request, response) => {
   response.json({
     status: "ok",
-    primaryProvider: primaryProviderKey,
-    apiKeyRequired: Boolean(apiKey),
-    cacheAvailable: providerCache.has(primaryProviderKey),
-    cacheTtlMs
+    primaryProvider: primaryProviderKey
   });
 });
 
@@ -327,22 +184,16 @@ app.all("/mirror/*", async (request, response) => {
   const targetUrl = buildTargetUrl(targetBaseUrl, proxiedPath, request.query);
 
   try {
-    const upstreamHeaders = new Headers();
-
-    for (const [key, value] of Object.entries(request.headers)) {
-      if (typeof value === "string") {
-        upstreamHeaders.set(key, value);
-      }
-    }
-
-    const upstreamResponse = await fetchUpstream(targetUrl, upstreamHeaders);
+    const upstreamResponse = await fetch(targetUrl, {
+      method: request.method
+    });
     const contentType = upstreamResponse.headers.get("content-type") || "";
     const payload = await upstreamResponse.text();
 
     copyResponseHeaders(upstreamResponse.headers, response);
     response.status(upstreamResponse.status);
 
-    if (contentType.includes("application/json") || isJsonLike(payload)) {
+    if (contentType.includes("application/json")) {
       response.type("application/json").send(payload);
       return;
     }
@@ -357,11 +208,11 @@ app.all("/mirror/*", async (request, response) => {
   }
 });
 
-app.get("/providers/:provider/live-feed", requireApiKey, async (request, response) => {
+app.get("/providers/:provider/live-feed", async (request, response) => {
   await relayProviderRequest(request.params.provider, request, response);
 });
 
-app.get("/live-feed", requireApiKey, async (request, response) => {
+app.get("/live-feed", async (request, response) => {
   await relayProviderRequest(primaryProviderKey, request, response);
 });
 

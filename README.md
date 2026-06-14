@@ -10,30 +10,7 @@ Copiez `.env.example` vers `.env` :
 PORT=3000
 TARGET_API_BASE_URL=https://jsonplaceholder.typicode.com
 MIRROR_USER_AGENT=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36
-UPSTREAM_TIMEOUT_MS=15000
-CACHE_TTL_MS=10000
-API_KEY=change-moi
 ```
-
-## Protection par clé API
-
-- Si `API_KEY` est défini, `/live-feed` et `/providers/:provider/live-feed` exigent l'en-tête `x-api-key`
-- Si la clé est absente ou invalide, l'API renvoie `401 Unauthorized`
-
-Exemple :
-
-```bash
-curl https://livefeedsht.onrender.com/live-feed \
-  -H "x-api-key: change-moi"
-```
-
-## Cache TTL
-
-- `CACHE_TTL_MS` définit la durée de vie du cache en millisecondes
-- Tant que le cache n'est pas expiré, la réponse est servie depuis le cache sans rappeler la source
-- `x-cache-status: fresh` : réponse servie depuis le cache TTL valide
-- `x-cache-status: live` : réponse fraîche récupérée auprès de la source
-- `x-cache-status: stale` : ancienne réponse de secours servie après échec amont
 
 ## Endpoints
 
