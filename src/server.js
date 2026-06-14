@@ -58,7 +58,15 @@ const upstreamPresets = {
   }
 };
 
+const providerKeys = Object.keys(upstreamPresets);
+const startupProviderKey =
+  providerKeys[Math.floor(Math.random() * providerKeys.length)];
+
 app.use(express.json());
+
+function pickRandomProviderKey() {
+  return providerKeys[Math.floor(Math.random() * providerKeys.length)];
+}
 
 function buildTargetUrl(baseUrl, path, query) {
   const normalizedBaseUrl = baseUrl.replace(/\/+$/, "");
@@ -102,7 +110,13 @@ function copyResponseHeaders(sourceHeaders, response) {
   }
 }
 
-async function relayRequest({ request, response, targetUrl, extraHeaders = {} }) {
+async function relayRequest({
+  request,
+  response,
+  targetUrl,
+  extraHeaders = {},
+  selectedProvider = null
+}) {
   const headers = new Headers();
 
   for (const [key, value] of Object.entries(request.headers)) {
@@ -142,6 +156,11 @@ async function relayRequest({ request, response, targetUrl, extraHeaders = {} })
       : Buffer.from(await upstreamResponse.arrayBuffer());
 
     copyResponseHeaders(upstreamResponse.headers, response);
+
+    if (selectedProvider) {
+      response.setHeader("x-selected-provider", selectedProvider);
+    }
+
     response.status(upstreamResponse.status);
 
     if (isJson) {
@@ -154,9 +173,33 @@ async function relayRequest({ request, response, targetUrl, extraHeaders = {} })
     response.status(502).json({
       error: "Bad Gateway",
       message: "Impossible de joindre l'API cible.",
-      details: error.message
+      details: error.message,
+      provider: selectedProvider
     });
   }
+}
+
+async function relayProviderRequest(providerKey, request, response) {
+  const provider = upstreamPresets[providerKey];
+
+  if (!provider) {
+    response.status(404).json({
+      error: "Provider introuvable",
+      availableProviders: providerKeys
+    });
+    return;
+  }
+
+  const query = mergeQuery(provider.defaultQuery, request.query);
+  const targetUrl = buildTargetUrl(provider.baseUrl, provider.path, query);
+
+  await relayRequest({
+    request,
+    response,
+    targetUrl,
+    extraHeaders: provider.headers,
+    selectedProvider: providerKey
+  });
 }
 
 app.get("/", (_request, response) => {
@@ -164,17 +207,20 @@ app.get("/", (_request, response) => {
     name: "mirror-api",
     message: "API miroir active",
     target: targetBaseUrl || null,
-    providers: Object.keys(upstreamPresets),
+    providers: providerKeys,
+    startupProvider: startupProviderKey,
     endpoints: {
       health: "/health",
       proxyAnyPath: "/mirror/*",
-      providerMirror: "/providers/:provider/live-feed"
+      providerMirror: "/providers/:provider/live-feed",
+      startupMirror: "/live-feed",
+      randomMirror: "/live-feed/random"
     }
   });
 });
 
 app.get("/health", (_request, response) => {
-  response.json({ status: "ok" });
+  response.json({ status: "ok", startupProvider: startupProviderKey });
 });
 
 app.all("/mirror/*", async (request, response) => {
@@ -193,28 +239,20 @@ app.all("/mirror/*", async (request, response) => {
 });
 
 app.get("/providers/:provider/live-feed", async (request, response) => {
-  const providerKey = request.params.provider;
-  const provider = upstreamPresets[providerKey];
+  await relayProviderRequest(request.params.provider, request, response);
+});
 
-  if (!provider) {
-    response.status(404).json({
-      error: "Provider introuvable",
-      availableProviders: Object.keys(upstreamPresets)
-    });
-    return;
-  }
+app.get("/live-feed", async (request, response) => {
+  await relayProviderRequest(startupProviderKey, request, response);
+});
 
-  const query = mergeQuery(provider.defaultQuery, request.query);
-  const targetUrl = buildTargetUrl(provider.baseUrl, provider.path, query);
-
-  await relayRequest({
-    request,
-    response,
-    targetUrl,
-    extraHeaders: provider.headers
-  });
+app.get("/live-feed/random", async (request, response) => {
+  const randomProviderKey = pickRandomProviderKey();
+  await relayProviderRequest(randomProviderKey, request, response);
 });
 
 app.listen(port, () => {
-  console.log(`Mirror API démarrée sur http://localhost:${port}`);
+  console.log(
+    `Mirror API démarrée sur http://localhost:${port} avec ${startupProviderKey} comme source principale`
+  );
 });

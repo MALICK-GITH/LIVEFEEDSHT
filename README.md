@@ -37,26 +37,22 @@ npm run dev
 - `ALL /mirror/*` : relaie la requête vers l'API cible
 - `GET /providers/1xbet/live-feed` : relaie le flux `1xbet`
 - `GET /providers/888starz/live-feed` : relaie le flux `888starz`
+- `GET /live-feed` : utilise la source choisie aléatoirement au démarrage
+- `GET /live-feed/random` : choisit une source aléatoire à chaque appel
+
+## Logique de sélection
+
+- Au démarrage du serveur, une source principale est choisie au hasard entre `1xbet` et `888starz`
+- Cette source reste la même jusqu'au prochain redémarrage
+- La route `/live-feed` utilise cette source principale
+- La route `/live-feed/random` refait un tirage aléatoire à chaque requête
+- La réponse contient l'en-tête `x-selected-provider` pour savoir quelle source a été utilisée
 
 ## Exemples
 
-Si `TARGET_API_BASE_URL=https://jsonplaceholder.typicode.com`, alors :
-
 ```bash
-GET http://localhost:3000/mirror/posts/1
-```
-
-relaie vers :
-
-```bash
-GET https://jsonplaceholder.typicode.com/posts/1
-```
-
-Les paramètres de requête sont conservés.
-
-Pour les fournisseurs prédéfinis :
-
-```bash
+GET http://localhost:3000/live-feed
+GET http://localhost:3000/live-feed/random
 GET http://localhost:3000/providers/1xbet/live-feed
 GET http://localhost:3000/providers/888starz/live-feed
 ```
@@ -64,10 +60,10 @@ GET http://localhost:3000/providers/888starz/live-feed
 Tu peux surcharger les paramètres par défaut :
 
 ```bash
-GET http://localhost:3000/providers/1xbet/live-feed?count=10&lng=fr
+GET http://localhost:3000/live-feed?count=10&lng=fr
 ```
 
 ## Remarques
 
-- Le service ne stocke pas de `cookie` privé.
-- Certains fournisseurs peuvent bloquer, limiter ou interdire ce type de relais selon leurs conditions d'utilisation.
+- Le service ne stocke pas de `cookie` privé
+- Certains fournisseurs peuvent bloquer, limiter ou interdire ce type de relais selon leurs conditions d'utilisation
