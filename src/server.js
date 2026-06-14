@@ -58,6 +58,105 @@ const upstreamPresets = {
   }
 };
 
+const keyDocumentation = {
+  root: {
+    Id: "Identifiant global de la réponse",
+    Success: "Indique si la requête a réussi",
+    Error: "Message d'erreur texte",
+    ErrorCode: "Code d'erreur numérique",
+    Guid: "Identifiant technique éventuel",
+    Value: "Tableau des événements renvoyés"
+  },
+  event: {
+    R: "Type ou rang technique du flux",
+    SC: "Informations de score et d'état du match",
+    VI: "Identifiant virtuel/interne de l'événement",
+    VA: "Valeur ou indicateur interne du flux",
+    HMH: "Indicateur technique du fournisseur",
+    GNS: "Indicateur booléen technique",
+    ICY: "Indicateur booléen technique",
+    U: "Timestamp technique de mise à jour",
+    I: "Identifiant unique du match",
+    N: "Identifiant numérique annexe",
+    T: "Type d'événement ou sport côté fournisseur",
+    CO: "Code catégorie/compétition",
+    E: "Marchés et cotes principaux",
+    AE: "Marchés et cotes additionnels",
+    EC: "Nombre total d'éléments ou marchés liés",
+    TG: "Groupe texte",
+    V: "Valeur technique",
+    VE: "Valeur technique annexe",
+    PN: "Nom annexe éventuel",
+    TN: "Statut texte du match",
+    DI: "Information descriptive additionnelle",
+    S: "Timestamp planifié du début",
+    HS: "Indicateur d'état",
+    SGC: "Compteur ou état technique",
+    CHIMG: "Image du championnat",
+    O1: "Nom de l'équipe ou participant 1",
+    O2: "Nom de l'équipe ou participant 2",
+    O1I: "ID équipe ou participant 1",
+    O2I: "ID équipe ou participant 2",
+    O1IS: "Liste d'IDs associée à O1",
+    O2IS: "Liste d'IDs associée à O2",
+    O1C: "Code pays/club/zone de O1",
+    O2C: "Code pays/club/zone de O2",
+    O1CT: "Ville ou abréviation de O1",
+    O2CT: "Ville ou abréviation de O2",
+    O1IMG: "Images de O1",
+    O2IMG: "Images de O2",
+    O1R: "Nom de O1 dans une autre langue",
+    O2R: "Nom de O2 dans une autre langue",
+    O1E: "Nom anglais de O1",
+    O2E: "Nom anglais de O2",
+    SI: "Identifiant du sport",
+    SN: "Nom du sport",
+    SR: "Nom du sport dans une autre langue",
+    SE: "Nom anglais du sport",
+    L: "Nom de la ligue ou compétition",
+    LR: "Nom de la ligue dans une autre langue",
+    LE: "Nom anglais de la ligue",
+    LI: "Identifiant de la ligue",
+    CN: "Pays, continent ou zone",
+    CE: "Pays, continent ou zone en anglais",
+    COI: "Identifiant géographique ou compétition",
+    MS: "États additionnels",
+    KI: "Indicateur technique",
+    CID: "Identifiant de catégorie",
+    SIMG: "Image du sport ou de la section",
+    TNS: "État texte secondaire"
+  },
+  score: {
+    FS: "Score complet ou structure de score",
+    PS: "Périodes ou scores par période",
+    CPS: "Période courante",
+    GS: "Statut global numérique",
+    TS: "Temps restant ou temps de jeu technique",
+    TD: "Décalage ou variation de temps",
+    TR: "Temps restant additionnel éventuel",
+    I: "Message texte interne",
+    SLS: "Statut texte court"
+  },
+  market: {
+    T: "Type de pari ou marché",
+    P: "Ligne, handicap ou total",
+    C: "Cote numérique",
+    CV: "Cote texte",
+    G: "Groupe de marché",
+    CE: "Indicateur spécial ou cote active",
+    B: "Indicateur booléen additionnel du fournisseur"
+  },
+  additionalMarketGroup: {
+    G: "Identifiant du groupe",
+    ME: "Liste des marchés du groupe"
+  },
+  notes: [
+    "Certaines clés sont des abréviations internes du fournisseur.",
+    "Leur sens exact peut varier selon le sport ou le type de marché.",
+    "Si la source ajoute de nouvelles clés, elles sont retransmises telles quelles par le miroir."
+  ]
+};
+
 const providerKeys = Object.keys(upstreamPresets);
 const primaryProviderKey = "888starz";
 
@@ -159,7 +258,8 @@ app.get("/", (_request, response) => {
       health: "/health",
       proxyAnyPath: "/mirror/*",
       providerMirror: "/providers/:provider/live-feed",
-      primaryMirror: "/live-feed"
+      primaryMirror: "/live-feed",
+      keyDocs: "/docs/keys"
     }
   });
 });
@@ -168,6 +268,14 @@ app.get("/health", (_request, response) => {
   response.json({
     status: "ok",
     primaryProvider: primaryProviderKey
+  });
+});
+
+app.get("/docs/keys", (_request, response) => {
+  response.json({
+    name: "mirror-api key documentation",
+    provider: primaryProviderKey,
+    sections: keyDocumentation
   });
 });
 
