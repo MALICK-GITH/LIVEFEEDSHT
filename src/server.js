@@ -159,6 +159,7 @@ const keyDocumentation = {
 
 const providerKeys = Object.keys(upstreamPresets);
 const primaryProviderKey = "888starz";
+const responseMode = "raw-pass-through";
 
 app.use(express.json());
 
@@ -204,6 +205,14 @@ function copyResponseHeaders(sourceHeaders, response) {
   }
 }
 
+function markRawResponse(response, providerKey = null) {
+  response.setHeader("x-response-mode", responseMode);
+
+  if (providerKey) {
+    response.setHeader("x-selected-provider", providerKey);
+  }
+}
+
 async function relayProviderRequest(providerKey, request, response) {
   const provider = upstreamPresets[providerKey];
 
@@ -228,7 +237,7 @@ async function relayProviderRequest(providerKey, request, response) {
     const payload = await upstreamResponse.text();
 
     copyResponseHeaders(upstreamResponse.headers, response);
-    response.setHeader("x-selected-provider", providerKey);
+    markRawResponse(response, providerKey);
     response.status(upstreamResponse.status);
 
     if (contentType.includes("application/json")) {
@@ -251,6 +260,7 @@ app.get("/", (_request, response) => {
   response.json({
     name: "mirror-api",
     message: "API miroir active",
+    mode: responseMode,
     target: targetBaseUrl || null,
     providers: providerKeys,
     primaryProvider: primaryProviderKey,
@@ -259,6 +269,7 @@ app.get("/", (_request, response) => {
       proxyAnyPath: "/mirror/*",
       providerMirror: "/providers/:provider/live-feed",
       primaryMirror: "/live-feed",
+      rawMirror: "/live-feed/raw",
       keyDocs: "/docs/keys"
     }
   });
@@ -267,7 +278,8 @@ app.get("/", (_request, response) => {
 app.get("/health", (_request, response) => {
   response.json({
     status: "ok",
-    primaryProvider: primaryProviderKey
+    primaryProvider: primaryProviderKey,
+    mode: responseMode
   });
 });
 
@@ -275,6 +287,7 @@ app.get("/docs/keys", (_request, response) => {
   response.json({
     name: "mirror-api key documentation",
     provider: primaryProviderKey,
+    mode: responseMode,
     sections: keyDocumentation
   });
 });
@@ -299,6 +312,7 @@ app.all("/mirror/*", async (request, response) => {
     const payload = await upstreamResponse.text();
 
     copyResponseHeaders(upstreamResponse.headers, response);
+    markRawResponse(response);
     response.status(upstreamResponse.status);
 
     if (contentType.includes("application/json")) {
@@ -321,6 +335,10 @@ app.get("/providers/:provider/live-feed", async (request, response) => {
 });
 
 app.get("/live-feed", async (request, response) => {
+  await relayProviderRequest(primaryProviderKey, request, response);
+});
+
+app.get("/live-feed/raw", async (request, response) => {
   await relayProviderRequest(primaryProviderKey, request, response);
 });
 
