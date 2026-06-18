@@ -12,7 +12,15 @@ TARGET_API_BASE_URL=https://jsonplaceholder.typicode.com
 MIRROR_USER_AGENT=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36
 REDIS_URL=redis://localhost:6379
 COLLECTOR_INTERVAL_MS=10000
+LIVEFEED_COUNT=200
 ```
+
+## Données maximales
+
+- `LIVEFEED_COUNT` définit combien d'éléments sont demandés à la source
+- la valeur par défaut passe à `200`
+- plus cette valeur est élevée, plus tu récupères de matchs/ligues si la source les renvoie
+- l'API miroir retransmet toujours le payload brut sans filtrage
 
 ## Architecture
 
@@ -37,9 +45,3 @@ COLLECTOR_INTERVAL_MS=10000
 - `x-selected-provider: 888starz`
 - `x-data-source: redis` sur `/live-feed`
 - `x-last-update` : date ISO de la dernière mise à jour Redis
-
-## Notes
-
-- `/live-feed` est maintenant pensé pour la montée en charge
-- la source n'est plus interrogée à chaque appel client
-- si Redis n'est pas prêt ou vide, `/live-feed` renvoie une erreur explicite

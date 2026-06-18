@@ -7,6 +7,7 @@ const port = process.env.PORT || 3000;
 const targetBaseUrl = process.env.TARGET_API_BASE_URL;
 const redisUrl = process.env.REDIS_URL;
 const collectorIntervalMs = Number(process.env.COLLECTOR_INTERVAL_MS || 10000);
+const liveFeedCount = process.env.LIVEFEED_COUNT || "200";
 const defaultUserAgent =
   process.env.MIRROR_USER_AGENT ||
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36";
@@ -17,7 +18,7 @@ const upstreamPresets = {
     path: "/service-api/LiveFeed/Get1x2_VZip",
     defaultQuery: {
       sports: "85",
-      count: "40",
+      count: liveFeedCount,
       lng: "fr",
       gr: "285",
       mode: "4",
@@ -40,7 +41,7 @@ const upstreamPresets = {
     path: "/service-api/LiveFeed/Get1x2_VZip",
     defaultQuery: {
       sports: "85",
-      count: "40",
+      count: liveFeedCount,
       lng: "fr",
       gr: "789",
       mode: "4",
@@ -372,7 +373,8 @@ app.get("/", (_request, response) => {
     redis: {
       enabled: Boolean(redisUrl),
       ready: redisReady,
-      collectorIntervalMs
+      collectorIntervalMs,
+      liveFeedCount
     },
     endpoints: {
       health: "/health",
@@ -412,6 +414,7 @@ app.get("/health", async (_request, response) => {
       enabled: Boolean(redisUrl),
       ready: redisReady,
       collectorIntervalMs,
+      liveFeedCount,
       snapshot: redisSnapshot
     }
   });
