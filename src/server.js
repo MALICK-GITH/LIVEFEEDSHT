@@ -1,9 +1,12 @@
 require("dotenv").config();
 const express = require("express");
+const { createClient } = require("redis");
 
 const app = express();
 const port = process.env.PORT || 3000;
 const targetBaseUrl = process.env.TARGET_API_BASE_URL;
+const redisUrl = process.env.REDIS_URL;
+const collectorIntervalMs = Number(process.env.COLLECTOR_INTERVAL_MS || 10000);
 const defaultUserAgent =
   process.env.MIRROR_USER_AGENT ||
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36";
@@ -160,8 +163,19 @@ const keyDocumentation = {
 const providerKeys = Object.keys(upstreamPresets);
 const primaryProviderKey = "888starz";
 const responseMode = "raw-pass-through";
+const redisKeys = {
+  payload: "livefeed:raw",
+  updatedAt: "livefeed:last_update",
+  provider: "livefeed:provider",
+  status: "livefeed:status",
+  error: "livefeed:last_error"
+};
 
 app.use(express.json());
+
+let redisClient = null;
+let redisReady = false;
+let collectorTimer = null;
 
 function buildTargetUrl(baseUrl, path, query) {
   const normalizedBaseUrl = baseUrl.replace(/\/+$/, "");
@@ -213,28 +227,119 @@ function markRawResponse(response, providerKey = null) {
   }
 }
 
-async function relayProviderRequest(providerKey, request, response) {
+function getProviderConfig(providerKey, requestQuery = {}) {
   const provider = upstreamPresets[providerKey];
 
   if (!provider) {
-    response.status(404).json({
-      error: "Provider introuvable",
-      availableProviders: providerKeys
-    });
-    return;
+    return null;
   }
 
-  const query = mergeQuery(provider.defaultQuery, request.query);
+  const query = mergeQuery(provider.defaultQuery, requestQuery);
   const targetUrl = buildTargetUrl(provider.baseUrl, provider.path, query);
   const headers = new Headers(provider.headers);
 
+  return {
+    provider,
+    targetUrl,
+    headers
+  };
+}
+
+async function fetchProviderPayload(providerKey, requestQuery = {}) {
+  const config = getProviderConfig(providerKey, requestQuery);
+
+  if (!config) {
+    throw new Error("Provider introuvable.");
+  }
+
+  const upstreamResponse = await fetch(config.targetUrl, {
+    method: "GET",
+    headers: config.headers
+  });
+  const contentType = upstreamResponse.headers.get("content-type") || "";
+  const payload = await upstreamResponse.text();
+
+  return {
+    upstreamResponse,
+    contentType,
+    payload
+  };
+}
+
+async function connectRedis() {
+  if (!redisUrl) {
+    return;
+  }
+
+  redisClient = createClient({
+    url: redisUrl
+  });
+
+  redisClient.on("error", (error) => {
+    redisReady = false;
+    console.error("Redis error:", error.message);
+  });
+
+  redisClient.on("ready", () => {
+    redisReady = true;
+  });
+
+  await redisClient.connect();
+  redisReady = true;
+}
+
+async function writeCollectorSuccess(payload) {
+  if (!redisReady || !redisClient) {
+    return;
+  }
+
+  const now = new Date().toISOString();
+
+  await redisClient.mSet({
+    [redisKeys.payload]: payload,
+    [redisKeys.updatedAt]: now,
+    [redisKeys.provider]: primaryProviderKey,
+    [redisKeys.status]: "ok",
+    [redisKeys.error]: ""
+  });
+}
+
+async function writeCollectorError(message) {
+  if (!redisReady || !redisClient) {
+    return;
+  }
+
+  await redisClient.mSet({
+    [redisKeys.status]: "error",
+    [redisKeys.error]: message
+  });
+}
+
+async function runCollector() {
   try {
-    const upstreamResponse = await fetch(targetUrl, {
-      method: "GET",
-      headers
-    });
-    const contentType = upstreamResponse.headers.get("content-type") || "";
-    const payload = await upstreamResponse.text();
+    const { payload } = await fetchProviderPayload(primaryProviderKey);
+    await writeCollectorSuccess(payload);
+  } catch (error) {
+    await writeCollectorError(error.message);
+    console.error("Collector error:", error.message);
+  }
+}
+
+async function startCollector() {
+  if (!redisReady || !redisClient) {
+    return;
+  }
+
+  await runCollector();
+  collectorTimer = setInterval(runCollector, collectorIntervalMs);
+}
+
+async function relayProviderRequest(providerKey, request, response) {
+  try {
+    const { upstreamResponse, contentType, payload } = await fetchProviderPayload(
+      providerKey,
+      request.query
+    );
 
     copyResponseHeaders(upstreamResponse.headers, response);
     markRawResponse(response, providerKey);
@@ -264,6 +369,11 @@ app.get("/", (_request, response) => {
     target: targetBaseUrl || null,
     providers: providerKeys,
     primaryProvider: primaryProviderKey,
+    redis: {
+      enabled: Boolean(redisUrl),
+      ready: redisReady,
+      collectorIntervalMs
+    },
     endpoints: {
       health: "/health",
       proxyAnyPath: "/mirror/*",
@@ -275,11 +385,35 @@ app.get("/", (_request, response) => {
   });
 });
 
-app.get("/health", (_request, response) => {
+app.get("/health", async (_request, response) => {
+  let redisSnapshot = null;
+
+  if (redisReady && redisClient) {
+    const values = await redisClient.mGet([
+      redisKeys.updatedAt,
+      redisKeys.provider,
+      redisKeys.status,
+      redisKeys.error
+    ]);
+
+    redisSnapshot = {
+      lastUpdate: values[0],
+      provider: values[1],
+      status: values[2],
+      error: values[3]
+    };
+  }
+
   response.json({
     status: "ok",
     primaryProvider: primaryProviderKey,
-    mode: responseMode
+    mode: responseMode,
+    redis: {
+      enabled: Boolean(redisUrl),
+      ready: redisReady,
+      collectorIntervalMs,
+      snapshot: redisSnapshot
+    }
   });
 });
 
@@ -334,16 +468,64 @@ app.get("/providers/:provider/live-feed", async (request, response) => {
   await relayProviderRequest(request.params.provider, request, response);
 });
 
-app.get("/live-feed", async (request, response) => {
-  await relayProviderRequest(primaryProviderKey, request, response);
+app.get("/live-feed", async (_request, response) => {
+  if (!redisReady || !redisClient) {
+    response.status(503).json({
+      error: "Redis indisponible",
+      message: "Le collector Redis n'est pas prêt."
+    });
+    return;
+  }
+
+  const values = await redisClient.mGet([
+    redisKeys.payload,
+    redisKeys.updatedAt,
+    redisKeys.provider,
+    redisKeys.status,
+    redisKeys.error
+  ]);
+
+  const payload = values[0];
+  const updatedAt = values[1];
+  const provider = values[2];
+  const status = values[3];
+  const lastError = values[4];
+
+  if (!payload) {
+    response.status(503).json({
+      error: "Aucune donnée disponible",
+      message: "Le collector n'a pas encore alimenté Redis.",
+      redisStatus: status,
+      lastError
+    });
+    return;
+  }
+
+  markRawResponse(response, provider || primaryProviderKey);
+  response.setHeader("x-data-source", "redis");
+  if (updatedAt) {
+    response.setHeader("x-last-update", updatedAt);
+  }
+  response.type("application/json").send(payload);
 });
 
 app.get("/live-feed/raw", async (request, response) => {
   await relayProviderRequest(primaryProviderKey, request, response);
 });
 
-app.listen(port, () => {
-  console.log(
-    `Mirror API démarrée sur http://localhost:${port} avec ${primaryProviderKey} comme source principale`
-  );
-});
+async function startServer() {
+  try {
+    await connectRedis();
+    await startCollector();
+  } catch (error) {
+    console.error("Startup warning:", error.message);
+  }
+
+  app.listen(port, () => {
+    console.log(
+      `Mirror API démarrée sur http://localhost:${port} avec ${primaryProviderKey} comme source principale`
+    );
+  });
+}
+
+startServer();
